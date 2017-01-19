@@ -74,15 +74,15 @@ class S3KeyInfo(Stage):
         return item
 
 
-class SkipIfKeyContains(Stage):
-    def __init__(self, filter):
+class Filter(Stage):
+    def __init__(self, name, filter):
+        self.name = name
         self.filter = filter
 
     def __call__(self, items):
         for item in items:
-            if self.filter in item.name:
-                print("{}: skipping with filter -> {}".format(
-                    item.name, self.filter))
+            if self.filter(item):
+                print("SKIPPED: by {} filter.".format(self.name))
                 continue
             yield item
 
@@ -238,9 +238,12 @@ def main():
     ))
 
     p.add(S3KeyInfo())
-    p.add(SkipIfKeyContains(filter='default'))
+    p.add(Filter('exclude keys with \'default\' in the name.',
+                 lambda x: 'default' in x.name))
     p.add(SwiftCreateTenantContainer(connection=conn, tenant=args.tenant))
     p.add(SwiftCreateFolderStructure(connection=conn, tenant=args.tenant))
+    p.add(Filter('exclude keys ending in \'\\\'',
+                 lambda x: x.name.endswith('/')))
     p.add(SwiftCheckIfFileExists(connection=conn, tenant=args.tenant))
     p.add(SwiftUploadFile(connection=conn, tenant=args.tenant))
 
