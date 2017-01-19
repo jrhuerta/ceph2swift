@@ -1,0 +1,6 @@
+boto==2.45.0
+futures==3.0.5
+python-swiftclient==3.2.0
+python-keystoneclient==3.9.0
+requests==2.12.4
+six==1.10.0
