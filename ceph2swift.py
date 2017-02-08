@@ -1,7 +1,9 @@
 #!/usr/bin/env python
+import arrow
 import argparse
 import boto
 import boto.s3.connection
+import logging
 import os
 import signal
 import time
@@ -118,7 +120,7 @@ class S3Stage(Stage):
     @property
     def bucket_name(self):
         try:
-            return 'alaya-{}'.format(self.config['tenant'])
+            return self.config['bucket_name']
         except ValueError:
             raise RuntimeError('S3Stage: tenant name not configured.')
 
@@ -128,12 +130,12 @@ class S3Stage(Stage):
             return self.connection.get_bucket(self.bucket_name)
         except Exception as ex:
             raise ex
-            #raise RuntimeError('S3Stage: error getting bucket.')
 
 
 class S3CreateFolderStructure(S3Stage):
 
     content_type = 'application/directory'
+    last_modified = 'x-last-modified'
     existing_folders = None
     start_folder_count = 0
 
@@ -154,10 +156,12 @@ class S3CreateFolderStructure(S3Stage):
             current_path = current_path + folder + '/'
             yield current_path
 
-    def create_folder(self, path):
+    def create_folder(self, path, item):
         try:
             key = self.bucket.new_key(path)
             key.content_type = self.content_type
+            key.set_metadata(self.last_modified,
+                             arrow.get(item.last_modified).isoformat())
             key.set_contents_from_string('')
             self.existing_folders.add(path)
             print(path)
@@ -177,12 +181,13 @@ class S3CreateFolderStructure(S3Stage):
         for folder in self.sub_folders(item.name):
             if folder in self.existing_folders:
                 continue
-            self.create_folder(folder)
+            self.create_folder(folder, item)
         return item
 
 
 class S3UploadFile(S3Stage):
 
+    last_modified = 'x-last-modified'
     key_count = 0
 
     def process(self, item):
@@ -191,6 +196,8 @@ class S3UploadFile(S3Stage):
             assert item.etag[1:-1] != key.etag[1:-1], "File already exists."
 
         key = self.bucket.new_key(item.name)
+        key.set_metadata(self.last_modified,
+                         arrow.get(item.last_modified).isoformat())
         key.set_contents_from_string(item.get_contents_as_string())
 
         key = self.bucket.get_key(item.name)
@@ -212,6 +219,9 @@ def args_spec():
         description='Optional arguments can be defined as '
                     'environment variables.')
 
+    parser.add_argument('--src-bucket', type=str, required=True)
+    parser.add_argument('--dst-bucket', type=str, required=True)
+
     parser.add_argument('--src-key-id', type=str, action=EnvDefault,
                         envvar='SRC_KEY_ID')
     parser.add_argument('--src-access-key', type=str, action=EnvDefault,
@@ -228,8 +238,6 @@ def args_spec():
     parser.add_argument('--dst-region', type=str, action=EnvDefault,
                         envvar='DST_REGION')
 
-    parser.add_argument('--tenant', type=str, required=True)
-
     return parser
 
 
@@ -242,8 +250,8 @@ def signal_handler(signal, frame):
     _exit_signal = True
 
 
-def src_keys_generator(conn, tenant):
-    for key in conn.get_bucket('alaya-{}'.format(tenant)).list():
+def src_keys_generator(conn, bucket_name):
+    for key in conn.get_bucket(bucket_name).list():
         if _exit_signal:
             raise StopIteration
         yield key
@@ -270,18 +278,20 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    p = Pipeline(src_keys_generator(src_connection, args.tenant))
+    p = Pipeline(src_keys_generator(src_connection, args.src_bucket))
 
     p.add(PrintFileInfo())
-    p.add(Filter('exclude keys with \'default\' in the name',
-                 lambda x: 'default' in x.name))
+    # p.add(Filter('exclude keys with \'default\' in the name',
+    #              lambda x: 'default' in x.name))
 
-    p.add(S3CreateFolderStructure(connection=dst_connection, tenant='testing'))
-    p.add(Filter('exclude keys ending in \'/\'', lambda x: x.name.endswith('/')))
-    p.add(S3UploadFile(connection=dst_connection, tenant='testing'))
+    p.add(S3CreateFolderStructure(connection=dst_connection,
+                                  bucket_name=args.dst_bucket))
+    p.add(Filter('exclude keys ending in \'/\'',
+                 lambda x: x.name.endswith('/')))
+    p.add(S3UploadFile(connection=dst_connection, bucket_name=args.dst_bucket))
     p()
 
 if __name__ == '__main__':
-    # logging.basicConfig(level=logging.DEBUG)
+    #logging.basicConfig(level=logging.DEBUG)
     main()
 
