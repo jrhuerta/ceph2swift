@@ -281,8 +281,8 @@ def main():
     p = Pipeline(src_keys_generator(src_connection, args.src_bucket))
 
     p.add(PrintFileInfo())
-    # p.add(Filter('exclude keys with \'default\' in the name',
-    #              lambda x: 'default' in x.name))
+    p.add(Filter('exclude keys with \'default\' in the name',
+                 lambda x: 'default' in x.name))
 
     p.add(S3CreateFolderStructure(connection=dst_connection,
                                   bucket_name=args.dst_bucket))
