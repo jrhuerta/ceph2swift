@@ -3,9 +3,9 @@ import arrow
 import argparse
 import boto
 import boto.s3.connection
-import logging
 import os
 import signal
+import sys
 import time
 
 
@@ -139,13 +139,34 @@ class S3CreateFolderStructure(S3Stage):
     existing_folders = None
     start_folder_count = 0
 
+    def __init__(self, existing_folders=None, **kwargs):
+        """
+        This stage will try to create parent folders that do not exist.
+        Preloaded existing folders can be passed down
+        :param existing_folders: Pre loaded existing folder list or set.
+        :param soft_folder_discovery: Use end / to detect folders else it will
+            use the mime type
+        :param preload_folders: If set to False we won't pre load folders.
+            default: True
+        :param kwargs: keyword arguments passed down to parent constructor.
+        """
+        super(S3CreateFolderStructure, self).__init__(**kwargs)
+        self.existing_folders = existing_folders
+
     def load_existing_folders(self):
         existing_folders = set()
         print('Preloading existing folders ')
         for key in self.bucket.list():
+            # Soft folder discovery is based on the folder name ending with /
+            if self.config.get('soft_folder_discovery'):
+                if key.name.endswith('/'):
+                    existing_folders.add(key.name)
+                continue
+            # Else check the mime type (the real deal)
             key = self.bucket.get_key(key.name)
             if key.content_type == self.content_type:
                 existing_folders.add(key.name)
+
         print('{} folders loaded.'.format(len(existing_folders)))
         return existing_folders
 
@@ -169,7 +190,9 @@ class S3CreateFolderStructure(S3Stage):
             print("{}: {}".format(path, e.message))
 
     def before_process(self):
-        self.existing_folders = self.load_existing_folders()
+        if not self.existing_folders and \
+                self.config.get('preload_folders', True):
+            self.existing_folders = self.load_existing_folders()
         self.start_folder_count = len(self.existing_folders)
 
     def after_process(self):
@@ -189,11 +212,25 @@ class S3UploadFile(S3Stage):
 
     last_modified = 'x-last-modified'
     key_count = 0
+    existing_files = None
+
+    def __init__(self, existing_files=None, **kwargs):
+        """
+        Upload file to destination bucket.
+        You can pass a pre loaded files dictionary to easy md5 verification.
+        :param existing_files: dict containing file key and etag.
+        :param kwargs:
+        """
+        super(S3UploadFile, self).__init__(**kwargs)
+        self.existing_files = existing_files
 
     def process(self, item):
-        key = self.bucket.get_key(item.name)
-        if key:
-            assert item.etag[1:-1] != key.etag[1:-1], "File already exists."
+        if self.existing_files:
+            key_md5 = self.existing_files.get(item.name)
+        else:
+            key = self.bucket.get_key(item.name)
+            key_md5 = not key or key.etag[1:-1]
+        assert item.etag[1:-1] != key_md5, "File already exists."
 
         key = self.bucket.new_key(item.name)
         key.set_metadata(self.last_modified,
@@ -278,6 +315,26 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
 
+    existing_folders = set()
+    existing_files = dict()
+    dst_bucket = dst_connection.get_bucket(args.dst_bucket)
+    print('Preloading folders:')
+    count = 0
+    for key in dst_bucket.list():
+        sys.stdout.write('.')
+        sys.stdout.flush()
+        count += 1
+        if count == 80:
+            print('')
+            count = 0
+        if _exit_signal:
+            print('User interrupted preload.')
+            sys.exit(0)
+        if key.name.endswith('/'):
+            existing_folders.add(key.name)
+            continue
+        existing_files[key.name] = key.etag[1:-1]
+
     p = Pipeline(src_keys_generator(src_connection, args.src_bucket))
 
     p.add(PrintFileInfo())
@@ -285,10 +342,13 @@ def main():
                  lambda x: 'default' in x.name))
 
     p.add(S3CreateFolderStructure(connection=dst_connection,
-                                  bucket_name=args.dst_bucket))
+                                  bucket_name=args.dst_bucket,
+                                  preload_folders=False,
+                                  existing_folders=existing_folders))
     p.add(Filter('exclude keys ending in \'/\'',
                  lambda x: x.name.endswith('/')))
-    p.add(S3UploadFile(connection=dst_connection, bucket_name=args.dst_bucket))
+    p.add(S3UploadFile(connection=dst_connection, bucket_name=args.dst_bucket,
+                       existing_files=existing_files))
     p()
 
 if __name__ == '__main__':
