@@ -86,9 +86,9 @@ class Pipeline(object):
 class PrintFileInfo(Stage):
 
     def process(self, item):
-        print('-'*80)
+        #print('-'*80)
         print(item.name)
-        print("SRC MD5: {}".format(item.etag[1:-1]))
+        #print("SRC MD5: {}".format(item.etag[1:-1]))
         return item
 
     def after_process(self):
@@ -306,49 +306,49 @@ def main():
         calling_format=boto.s3.connection.OrdinaryCallingFormat()
     )
 
-    dst_connection = boto.s3.connect_to_region(
-        args.dst_region,
-        aws_access_key_id=args.dst_key_id,
-        aws_secret_access_key=args.dst_access_key,
-        host=args.dst_host
-    )
+    # dst_connection = boto.s3.connect_to_region(
+    #     args.dst_region,
+    #     aws_access_key_id=args.dst_key_id,
+    #     aws_secret_access_key=args.dst_access_key,
+    #     host=args.dst_host
+    # )
 
-    signal.signal(signal.SIGINT, signal_handler)
-
-    existing_folders = set()
-    existing_files = dict()
-    dst_bucket = dst_connection.get_bucket(args.dst_bucket)
-    print('Preloading folders:')
-    count = 0
-    for key in dst_bucket.list():
-        sys.stdout.write('.')
-        sys.stdout.flush()
-        count += 1
-        if count == 80:
-            print('')
-            count = 0
-        if _exit_signal:
-            print('User interrupted preload.')
-            sys.exit(0)
-        if key.name.endswith('/'):
-            existing_folders.add(key.name)
-            continue
-        existing_files[key.name] = key.etag[1:-1]
+    # signal.signal(signal.SIGINT, signal_handler)
+    #
+    # existing_folders = set()
+    # existing_files = dict()
+    # dst_bucket = dst_connection.get_bucket(args.dst_bucket)
+    # print('Preloading folders:')
+    # count = 0
+    # for key in dst_bucket.list():
+    #     sys.stdout.write('.')
+    #     sys.stdout.flush()
+    #     count += 1
+    #     if count == 80:
+    #         print('')
+    #         count = 0
+    #     if _exit_signal:
+    #         print('User interrupted preload.')
+    #         sys.exit(0)
+    #     if key.name.endswith('/'):
+    #         existing_folders.add(key.name)
+    #         continue
+    #     existing_files[key.name] = key.etag[1:-1]
 
     p = Pipeline(src_keys_generator(src_connection, args.src_bucket))
 
     p.add(PrintFileInfo())
-    p.add(Filter('exclude keys with \'default\' in the name',
-                 lambda x: 'default' in x.name))
-
-    p.add(S3CreateFolderStructure(connection=dst_connection,
-                                  bucket_name=args.dst_bucket,
-                                  preload_folders=False,
-                                  existing_folders=existing_folders))
-    p.add(Filter('exclude keys ending in \'/\'',
-                 lambda x: x.name.endswith('/')))
-    p.add(S3UploadFile(connection=dst_connection, bucket_name=args.dst_bucket,
-                       existing_files=existing_files))
+    # p.add(Filter('exclude keys with \'default\' in the name',
+    #              lambda x: 'default' in x.name))
+    #
+    # p.add(S3CreateFolderStructure(connection=dst_connection,
+    #                               bucket_name=args.dst_bucket,
+    #                               preload_folders=False,
+    #                               existing_folders=existing_folders))
+    # p.add(Filter('exclude keys ending in \'/\'',
+    #              lambda x: x.name.endswith('/')))
+    # p.add(S3UploadFile(connection=dst_connection, bucket_name=args.dst_bucket,
+    #                    existing_files=existing_files))
     p()
 
 if __name__ == '__main__':
