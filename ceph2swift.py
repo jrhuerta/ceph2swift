@@ -47,8 +47,10 @@ class Stage(object):
         for item in self.items:
             try:
                 yield self.process(item)
-            except Exception as ex:
+            except AssertionError as ex:
                 print("SKIPPED: {}".format(ex.message))
+            except Exception as error:
+                print("ERROR: {}".format(error))
         self.after_process()
 
 
@@ -291,6 +293,7 @@ def src_keys_generator(conn, bucket_name):
     for key in conn.get_bucket(bucket_name).list():
         if _exit_signal:
             raise StopIteration
+        key.name = key.name.encode('utf8')
         yield key
 
 
